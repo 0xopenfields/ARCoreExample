@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
+import android.opengl.Matrix
 import android.os.Bundle
 import android.util.Log
 import android.view.Surface
@@ -38,9 +39,11 @@ class MainActivity : AppCompatActivity() {
 
     private var cameraTextureUniform: Int = 0
 
-    private var viewPortWidth: Int = 0
+    private var pointsProgram: Int = 0
 
-    private var viewPortHeight: Int = 0
+    private var pointsPositionAttrib: Int = 0
+
+    private var pointColorAttrib: Int = 0
 
     private var quadCoords: FloatArray = floatArrayOf(-1.0f, -1.0f, +1.0f, -1.0f, -1.0f, +1.0f, +1.0f, +1.0f)
 
@@ -159,25 +162,40 @@ class MainActivity : AppCompatActivity() {
             GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
 
             try {
-                val vs = loadGLShader(this@MainActivity, GLES20.GL_VERTEX_SHADER, "shaders/screenquad.vert")
-                val fs = loadGLShader(this@MainActivity, GLES20.GL_FRAGMENT_SHADER, "shaders/screenquad.frag")
+                cameraProgram = GLES20.glCreateProgram().also {
+                    val vs = loadGLShader(this@MainActivity, GLES20.GL_VERTEX_SHADER, "shaders/screenquad.vert")
+                    val fs = loadGLShader(this@MainActivity, GLES20.GL_FRAGMENT_SHADER, "shaders/screenquad.frag")
 
-                cameraProgram = GLES20.glCreateProgram()
-                GLES20.glAttachShader(cameraProgram, vs)
-                GLES20.glAttachShader(cameraProgram, fs)
-                GLES20.glLinkProgram(cameraProgram)
-                GLES20.glUseProgram(cameraProgram)
+                    GLES20.glAttachShader(it, vs)
+                    GLES20.glAttachShader(it, fs)
+                    GLES20.glLinkProgram(it)
+                    GLES20.glUseProgram(it)
 
-                cameraPositionAttrib = GLES20.glGetAttribLocation(cameraProgram, "a_Position")
-                cameraTexCoordAttrib = GLES20.glGetAttribLocation(cameraProgram, "a_TexCoord")
-                cameraTextureUniform = GLES20.glGetUniformLocation(cameraProgram, "sTexture")
+                    cameraPositionAttrib = GLES20.glGetAttribLocation(it, "a_Position")
+                    cameraTexCoordAttrib = GLES20.glGetAttribLocation(it, "a_TexCoord")
+                    cameraTextureUniform = GLES20.glGetUniformLocation(it, "sTexture")
 
-                GLES20.glGenTextures(1, textures, 0)
-                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textures[0])
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
-                GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                    GLES20.glGenTextures(1, textures, 0)
+                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textures[0])
+                    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+                    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+                    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+                    GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+                }
+
+                // Points shader
+                pointsProgram = GLES20.glCreateProgram().also {
+                    val vs = loadGLShader(this@MainActivity, GLES20.GL_VERTEX_SHADER, "shaders/coordinates.vert")
+                    val fs = loadGLShader(this@MainActivity, GLES20.GL_FRAGMENT_SHADER, "shaders/coordinates.frag")
+
+                    GLES20.glAttachShader(it, vs)
+                    GLES20.glAttachShader(it, fs)
+                    GLES20.glLinkProgram(it)
+                    GLES20.glUseProgram(it)
+
+                    pointsPositionAttrib = GLES20.glGetAttribLocation(it, "a_Position")
+                    pointColorAttrib = GLES20.glGetAttribLocation(it, "a_FragColor")
+                }
             } catch (e: IOException) {
                 Log.e(TAG, "Failed to read an asset file", e)
             }
@@ -200,40 +218,95 @@ class MainActivity : AppCompatActivity() {
                 val camera = frame.camera
                 val projectionMatrix = FloatArray(16)
                 val viewMatrix = FloatArray(16)
-                val colorCorrectionRgba = FloatArray(4)
+
                 camera.getProjectionMatrix(projectionMatrix, 0, 0.1f, 100.0f)
                 camera.getViewMatrix(viewMatrix, 0)
-                frame.lightEstimate.getColorCorrection(colorCorrectionRgba, 0)
 
-                if (frame.hasDisplayGeometryChanged()) {
-                    frame.transformCoordinates2d(Coordinates2d.OPENGL_NORMALIZED_DEVICE_COORDINATES,
-                                                 quadCoords,
-                                                 Coordinates2d.TEXTURE_NORMALIZED,
-                                                 quadTexCoords)
+                // Draw texture
+                GLES20.glUseProgram(cameraProgram).also {
+                    if (frame.hasDisplayGeometryChanged()) {
+                        frame.transformCoordinates2d(Coordinates2d.OPENGL_NORMALIZED_DEVICE_COORDINATES,
+                                                     quadCoords,
+                                                     Coordinates2d.TEXTURE_NORMALIZED,
+                                                     quadTexCoords)
+                    }
+
+                    GLES20.glDepthMask(false)
+                    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textures[0])
+                    GLES20.glUniform1i(cameraTextureUniform, 0)
+                    GLES20.glEnableVertexAttribArray(cameraPositionAttrib)
+                    GLES20.glEnableVertexAttribArray(cameraTexCoordAttrib)
+                    GLES20.glVertexAttribPointer(cameraPositionAttrib, 2, GLES20.GL_FLOAT, false, 0, makeFloatBuffer(quadCoords))
+                    GLES20.glVertexAttribPointer(cameraTexCoordAttrib, 2, GLES20.GL_FLOAT, false, 0, makeFloatBuffer(quadTexCoords))
+                    GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+                    GLES20.glDisableVertexAttribArray(cameraPositionAttrib)
+                    GLES20.glDisableVertexAttribArray(cameraTexCoordAttrib)
+                    GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, 0)
+                    GLES20.glUseProgram(0)
                 }
 
-                val quadCoordsBuffer = makeFloatBuffer(quadCoords)
-                val quadTexCoordsBuffer = makeFloatBuffer(quadTexCoords)
-                quadCoordsBuffer.position(0)
-                quadTexCoordsBuffer.position(0)
+                // Draw faces
+                val faces = session!!.getAllTrackables(AugmentedFace::class.java)
 
-                GLES20.glDisable(GLES20.GL_DEPTH_TEST)
-                GLES20.glDepthMask(false)
+                GLES20.glEnableVertexAttribArray(pointsPositionAttrib)
+                GLES20.glEnableVertexAttribArray(pointColorAttrib)
 
-                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+                for (face in faces) {
+                    if (face.trackingState == TrackingState.TRACKING) {
+                        GLES20.glUseProgram(pointsProgram).also {
+                            val faceMeshCount = face.meshVertices.limit() / 3;
+                            val vertices = face.meshVertices
+                            var modelMatrix = FloatArray(16)
+                            face.centerPose.toMatrix(modelMatrix, 0)
 
-                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, textures[0])
-                GLES20.glUseProgram(cameraProgram)
-                GLES20.glUniform1i(cameraTextureUniform, 0)
-                GLES20.glVertexAttribPointer(cameraPositionAttrib, 2, GLES20.GL_FLOAT, false, 0, quadCoordsBuffer)
-                GLES20.glVertexAttribPointer(cameraTexCoordAttrib, 2, GLES20.GL_FLOAT, false, 0, quadTexCoordsBuffer)
-                GLES20.glEnableVertexAttribArray(cameraPositionAttrib)
-                GLES20.glEnableVertexAttribArray(cameraTexCoordAttrib)
+                            GLES20.glDepthMask(false)
+                            GLES20.glEnableVertexAttribArray(pointsPositionAttrib)
+                            GLES20.glUniform3f(GLES20.glGetUniformLocation(pointsProgram, "u_Translation"), face.centerPose.tx(), face.centerPose.ty(), face.centerPose.tz())
+                            GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(pointsProgram, "u_Model"), 1, false, modelMatrix, 0)
+                            GLES20.glVertexAttribPointer(pointsPositionAttrib, 3, GLES20.GL_FLOAT, false, 0, vertices)
+                            GLES20.glDrawArrays(GLES20.GL_POINTS, 0, faceMeshCount)
+                            GLES20.glDisableVertexAttribArray(pointsPositionAttrib)
+                            GLES20.glUseProgram(0)
+                        }
+                    }
+                }
 
-                GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-                GLES20.glDisableVertexAttribArray(cameraPositionAttrib)
-                GLES20.glDisableVertexAttribArray(cameraTexCoordAttrib)
+//                GLES20.glUseProgram(pointsProgram).also {
+//                    val faces = session!!.getAllTrackables(AugmentedFace::class.java)
+//
+//                    GLES20.glEnableVertexAttribArray(pointsPositionAttrib)
+//                    GLES20.glEnableVertexAttribArray(pointColorAttrib)
+//
+//                    for (face in faces) {
+//                        if (face.trackingState == TrackingState.TRACKING) {
+//                            val faceMeshCount = face.meshVertices.limit() / 3;
+//                            val vertices = face.meshVertices
+//                            val lightDirection = floatArrayOf(0.0f, 1.0f, 0.0f, 0.0f)
+//                            var modelMatrix = FloatArray(16)
+//                            var modelViewMatrix = FloatArray(16)
+//                            var modelViewProjectionMatrix = FloatArray(16)
+//                            var tmpMatrix = FloatArray(16)
+//                            var viewLightDirection = FloatArray(4)
+//
+//                            face.centerPose.toMatrix(modelMatrix, 0)
+//                            Matrix.multiplyMM(tmpMatrix, 0, projectionMatrix, 0, viewMatrix, 0)
+//                            Matrix.multiplyMM(modelViewProjectionMatrix, 0, tmpMatrix, 0, modelMatrix, 0)
+//                            Matrix.multiplyMM(modelViewMatrix, 0, viewMatrix, 0, modelMatrix, 0)
+//                            Matrix.multiplyMV(viewLightDirection, 0, modelViewMatrix, 0, lightDirection, 0)
+//                            normalizeVec3(viewLightDirection)
+//
+//                            GLES20.glDepthMask(false)
+//                            GLES20.glUniform3f(GLES20.glGetUniformLocation(pointsProgram, "u_Translation"), face.centerPose.tx(), face.centerPose.ty(), face.centerPose.tz())
+//                            GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(pointsProgram, "u_Model"), 1, false, modelViewMatrix, 0)
+//                            GLES20.glVertexAttribPointer(pointsPositionAttrib, 3, GLES20.GL_FLOAT, false, 0, vertices)
+//                            GLES20.glDrawArrays(GLES20.GL_POINTS, 0, faceMeshCount)
+//                            GLES20.glDisableVertexAttribArray(pointsPositionAttrib)
+//                            GLES20.glUseProgram(0)
+//                        }
+//                    }
+//                }
             } catch (t: Throwable) {
                 Log.e(TAG, "Exception on the OpenGL thread", t)
             } finally {
@@ -245,7 +318,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         @Throws(IOException::class)
         private fun loadGLShader(context: Context, type: Int, filename: String): Int {
-            var code: String = ""
+            var code: String
             context.assets.open(filename).use { inputStream ->
                 code = inputStream.bufferedReader().use { it.readText() }
             }
@@ -275,6 +348,13 @@ class MainActivity : AppCompatActivity() {
                 put(arr)
                 position(0)
             }
+        }
+
+        private fun normalizeVec3(v: FloatArray) {
+            val reciprocalLength = 1.0f / Math.sqrt((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).toDouble()).toFloat()
+            v[0] *= reciprocalLength
+            v[1] *= reciprocalLength
+            v[2] *= reciprocalLength
         }
     }
 
